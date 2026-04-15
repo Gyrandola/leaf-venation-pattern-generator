@@ -8,14 +8,17 @@ static VEIN_GROWTH_RATE: f32 = 8.5;
 
 static AUXIN_RADIUS: f32 = 4.0;
 static AUXIN_COLOR: Color = RED;
-static AUXIN_NUMBER: i32 = 750;
+static AUXIN_STARTING_NUMBER: i32 = 800;
+
+/// Number of auxins to generate when pressing space.
+static AUXIN_GENERATE_NUMBER: i32 = 100;
 
 /// The distance at which an auxin is "consumed" by a vein.
-static PROXIMITY_THRESHOLD: f32 = VEIN_RADIUS + AUXIN_RADIUS;
+static PROXIMITY_THRESHOLD: f32 = VEIN_RADIUS + AUXIN_RADIUS + 5.0;
 static SHOW_PROXIMITY_THRESHOLD: bool = false;
 
 /// The maximum distance an auxin will attract a vein.
-static DIST_MAX: f32 = 100.0;
+static DIST_MAX: f32 = 75.0;
 
 
 type Point = Vec2;
@@ -23,7 +26,7 @@ type Point = Vec2;
 struct Vein {
     position: Point,
 
-    /// Vector pointing from the vein to the closest auxin.
+    /// Vector to the closest auxin(s).
     direction: Point,
 }
 
@@ -33,42 +36,61 @@ struct Vein {
 //////////////////////////////////////////////
 //////////////////////////////////////////////
 
+fn window_conf() -> Conf {
+    Conf {
+        window_title: "Venation Pattern Generator".to_owned(),
+        window_width: 1920,
+        window_height: 1080,
+        ..Default::default()
+    }
+}
 
-
-
-#[macroquad::main("VenationPatternGenerator")]
+#[macroquad::main(window_conf)]
 async fn main() {
-
-    next_frame().await;
 
     srand(miniquad::date::now() as u64);
 
     let mut veins: Vec<Vein> = Vec::new();
-    let mut auxins: Vec<Point> = Vec::new();
-
-    // Generate random auxins.
-    for _ in 0..AUXIN_NUMBER {
-        let x = rand::gen_range(0.0, screen_width());
-        let y = rand::gen_range(0.0, screen_height());
-        auxins.push(Point {x, y});
-    }
+    let mut auxins: Vec<Point> = generate_auxins(AUXIN_STARTING_NUMBER);
 
     // Initialize a root vein.
     let root = Point { x: screen_width()/2.0, y: screen_height()/1.5 };
     veins.push(Vein {position:root, direction:Point { x: 0.0, y: 0.0 }});
 
+    // Control variables
+    let mut is_paused = true;
+    let mut last_update = get_time();
+    let update_speed = 0.05;           // Step every 0.05 seconds (20 FPS)
+
+
     loop {
+        if is_key_pressed(KeyCode::Escape) { return; }
+
+        if is_key_pressed(KeyCode::Space) {
+            is_paused = !is_paused;
+        }
+
+        if is_key_pressed(KeyCode::A) {
+            auxins.append(&mut generate_auxins(AUXIN_GENERATE_NUMBER));
+        }
+
+        let current_time = get_time();
+        if !is_paused && (current_time - last_update >= update_speed) {
+            grow_veins_step(&auxins, &mut veins);
+            remove_auxins_in_proximity(&mut auxins, &veins);
+            last_update = current_time;
+        }
 
         clear_background(WHITE);
 
-        // Calculate vein growth.
-        grow_veins_step(&auxins, &mut veins);
-
-        // Remove auxins that have been reached.
-        remove_auxins_in_proximity(&mut auxins, &veins);
-
-        // Render.
         draw(&auxins, &veins);
+
+        let status_text = if is_paused { "PAUSED" } else { "RUNNING" };
+        let status_color = if is_paused { RED } else { GREEN };
+
+        draw_text(&format!("Status: {}", status_text), 10.0, 30.0, 40.0, status_color);
+        draw_text("Press SPACE to Play/Pause", 10.0, 60.0, 30.0, BLACK);
+        draw_text("Press A to add more auxins", 10.0, 90.0, 30.0, BLACK);
 
         next_frame().await
     }
@@ -114,7 +136,11 @@ fn grow_veins_step(auxins: &Vec<Point>, veins: &mut Vec<Vein>){
 
         // Veins with a non-zero direction are being attracted to an auxin, so they grow.
         if vein.direction != Point::ZERO {
-            let new_position = vein.position + (vein.direction.normalize() * VEIN_GROWTH_RATE);
+
+            // Without a bit of noise, if a vein finds itself inbetween two auxins,
+            // the resulting direction vector points to the middle, and gets "stuck".
+            let growth_direction = vein.direction.normalize() + noise();
+            let new_position = vein.position + (growth_direction * VEIN_GROWTH_RATE);
 
             new_veins.push(Vein {
                 position: new_position,
@@ -127,7 +153,12 @@ fn grow_veins_step(auxins: &Vec<Point>, veins: &mut Vec<Vein>){
     }
 
     veins.append(&mut new_veins);
+}
 
+fn noise() -> Vec2 {
+    let x = rand::gen_range(-0.15, 0.15);
+    let y = rand::gen_range(-0.15, 0.15);
+    Vec2::new(x, y)
 }
 
 fn remove_auxins_in_proximity(auxins: &mut Vec<Point>, veins: &[Vein]) {
@@ -138,6 +169,16 @@ fn remove_auxins_in_proximity(auxins: &mut Vec<Point>, veins: &[Vein]) {
             (vein.position - *auxin).length() < PROXIMITY_THRESHOLD
         })
     });
+}
+
+fn generate_auxins(n: i32) -> Vec<Point> {
+    let mut auxins: Vec<Point> = Vec::new();
+    for _ in 0..n {
+        let x = rand::gen_range(0.0, screen_width());
+        let y = rand::gen_range(0.0, screen_height());
+        auxins.push(Point {x, y});
+    }
+    auxins
 }
 
 fn draw(auxins: &[Vec2], veins: &[Vein]) {
